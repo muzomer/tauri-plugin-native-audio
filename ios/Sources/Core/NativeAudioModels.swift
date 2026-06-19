@@ -11,6 +11,12 @@ struct NativeAudioState: Encodable, Sendable {
   let isPlaying: Bool
   let buffering: Bool
   let rate: Double
+  // OS-reported audio output latency in seconds (route-aware). 0 means unknown.
+  let outputLatency: Double
+  // Active audio output route. One of: "builtin", "wired", "bluetooth", "usb",
+  // "hdmi", "other", "unknown". Consumers use this together with `outputLatency`
+  // to decide whether to subtract latency from `currentTime` and how much.
+  let outputRoute: String
   let error: String?
 }
 

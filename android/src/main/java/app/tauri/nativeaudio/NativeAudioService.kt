@@ -20,6 +20,7 @@ private const val NOTIFICATION_ICON_NAME = "ic_notification"
 class NativeAudioService : MediaSessionService() {
     private var notificationManager: PlayerNotificationManager? = null
     private var appLargeIcon: Bitmap? = null
+    private var isForeground = false
 
     override fun onCreate() {
         super.onCreate()
@@ -40,6 +41,7 @@ class NativeAudioService : MediaSessionService() {
         notificationManager = null
         appLargeIcon?.recycle()
         appLargeIcon = null
+        isForeground = false
         super.onDestroy()
     }
 
@@ -80,15 +82,25 @@ class NativeAudioService : MediaSessionService() {
             .setNotificationListener(
                 object : PlayerNotificationManager.NotificationListener {
                     override fun onNotificationPosted(notificationId: Int, notification: Notification, ongoing: Boolean) {
-                        if (ongoing) {
+                        // The service is started via startForegroundService(), which requires
+                        // startForeground() to be called within ~5s or the OS throws
+                        // ForegroundServiceDidNotStartInTimeException. The very first posted
+                        // notification can arrive with ongoing=false (e.g. while still
+                        // buffering); always promote to foreground at least once to satisfy
+                        // that deadline, then detach if playback is not active.
+                        if (!isForeground) {
                             startForeground(notificationId, notification)
-                        } else {
+                            isForeground = true
+                        }
+                        if (!ongoing) {
                             stopForegroundCompat(remove = false)
+                            isForeground = false
                         }
                     }
 
                     override fun onNotificationCancelled(notificationId: Int, dismissedByUser: Boolean) {
                         stopForegroundCompat(remove = true)
+                        isForeground = false
                         stopSelf()
                     }
                 },

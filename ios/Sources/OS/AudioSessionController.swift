@@ -6,6 +6,7 @@ enum AudioSessionEvent: Sendable {
   case interruptionBegan
   case interruptionEnded(shouldResume: Bool)
   case oldDeviceUnavailable
+  case routeChanged
 }
 
 final class AudioSessionController {
@@ -21,6 +22,46 @@ final class AudioSessionController {
     try onMain {
       let session = AVAudioSession.sharedInstance()
       try session.setCategory(.playback, mode: .default, options: [])
+    }
+  }
+
+  /// OS-reported audio output latency in seconds. Route-aware (updates for Bluetooth,
+  /// AirPods, etc.). Returns 0 when unknown — e.g. the session is not active yet, in
+  /// which case `AVAudioSession` reports 0.
+  func outputLatencySeconds() -> Double {
+    onMain {
+      let latency = AVAudioSession.sharedInstance().outputLatency
+      guard latency.isFinite, latency >= 0 else {
+        return 0.0
+      }
+      return latency
+    }
+  }
+
+  /// Active audio output route, derived from `AVAudioSession.currentRoute.outputs`.
+  /// Returns one of "builtin", "wired", "bluetooth", "usb", "hdmi", "other", "unknown".
+  func outputRoute() -> String {
+    onMain {
+      let outputs = AVAudioSession.sharedInstance().currentRoute.outputs
+      guard let portType = outputs.first?.portType else {
+        return "unknown"
+      }
+      switch portType {
+      case .builtInSpeaker, .builtInReceiver:
+        return "builtin"
+      case .headphones, .lineOut:
+        return "wired"
+      case .bluetoothA2DP, .bluetoothLE, .bluetoothHFP:
+        return "bluetooth"
+      case .usbAudio:
+        return "usb"
+      case .HDMI:
+        return "hdmi"
+      case .carAudio, .airPlay:
+        return "other"
+      default:
+        return "unknown"
+      }
     }
   }
 
@@ -114,6 +155,10 @@ final class AudioSessionController {
 
     if reason == .oldDeviceUnavailable {
       eventHandler?(.oldDeviceUnavailable)
+    } else {
+      // The output route changed (e.g. switched to Bluetooth/AirPods); output latency
+      // may have changed, so let the runtime re-emit state with the fresh value.
+      eventHandler?(.routeChanged)
     }
   }
 
