@@ -38,6 +38,33 @@ final class AudioSessionController {
     }
   }
 
+  /// Active audio output route, derived from `AVAudioSession.currentRoute.outputs`.
+  /// Returns one of "builtin", "wired", "bluetooth", "usb", "hdmi", "other", "unknown".
+  func outputRoute() -> String {
+    onMain {
+      let outputs = AVAudioSession.sharedInstance().currentRoute.outputs
+      guard let portType = outputs.first?.portType else {
+        return "unknown"
+      }
+      switch portType {
+      case .builtInSpeaker, .builtInReceiver:
+        return "builtin"
+      case .headphones, .lineOut:
+        return "wired"
+      case .bluetoothA2DP, .bluetoothLE, .bluetoothHFP:
+        return "bluetooth"
+      case .usbAudio:
+        return "usb"
+      case .HDMI:
+        return "hdmi"
+      case .carAudio, .airPlay:
+        return "other"
+      default:
+        return "unknown"
+      }
+    }
+  }
+
   func setActive(_ active: Bool) throws {
     try onMain {
       let session = AVAudioSession.sharedInstance()

@@ -9,6 +9,8 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.app.ActivityManager
+import android.media.AudioDeviceCallback
+import android.media.AudioDeviceInfo
 import android.media.AudioManager
 import android.os.Build
 import android.os.Handler
@@ -60,6 +62,12 @@ data class NativeAudioState(
     // OS-reported audio output latency in seconds. 0 means unknown. See
     // NativeAudioRuntime.estimateOutputLatencySecLocked for the (best-effort) source.
     val outputLatency: Double = 0.0,
+    // Active audio output route. One of: "builtin", "wired", "bluetooth", "usb",
+    // "hdmi", "other", "unknown". Consumers should branch on this — on Android the
+    // ExoPlayer position is already audible-aligned for builtin/wired routes, but
+    // BT A2DP latency (100-300ms+) is invisible to the OS, so the app should add
+    // its own fixed correction when outputRoute == "bluetooth".
+    val outputRoute: String = "unknown",
     val error: String? = null,
 )
 
@@ -111,6 +119,18 @@ object NativeAudioRuntime {
     private var lastProgressPersistedTimeSec: Double? = null
     // Best-effort, device-static output latency estimate in seconds (0 = unknown).
     private var outputLatencyEstimateSec = 0.0
+    // Active output route ("builtin"/"wired"/"bluetooth"/etc). Refreshed by AudioDeviceCallback.
+    private var outputRouteCache: String = "unknown"
+    private var audioDeviceCallback: AudioDeviceCallback? = null
+
+    private val audioDeviceCallbackImpl = object : AudioDeviceCallback() {
+        override fun onAudioDevicesAdded(addedDevices: Array<out AudioDeviceInfo>?) {
+            refreshOutputRouteAndEmit()
+        }
+        override fun onAudioDevicesRemoved(removedDevices: Array<out AudioDeviceInfo>?) {
+            refreshOutputRouteAndEmit()
+        }
+    }
 
     private val tickRunnable = object : Runnable {
         override fun run() {
@@ -191,6 +211,8 @@ object NativeAudioRuntime {
             val ctx = context.applicationContext
             appContext = ctx
             outputLatencyEstimateSec = estimateOutputLatencySecLocked(ctx)
+            outputRouteCache = currentOutputRouteLocked(ctx)
+            registerAudioDeviceCallbackLocked(ctx)
 
             val audioAttributes = AudioAttributes.Builder()
                 .setUsage(C.USAGE_MEDIA)
@@ -396,6 +418,8 @@ object NativeAudioRuntime {
             tickHandler.removeCallbacks(tickRunnable)
             tickScheduled = false
 
+            unregisterAudioDeviceCallbackLocked(context.applicationContext)
+
             player?.removeListener(playerListener)
             player?.release()
             player = null
@@ -408,6 +432,7 @@ object NativeAudioRuntime {
             pendingSeekState = null
             currentStoryId = null
             appContext = null
+            outputRouteCache = "unknown"
         }
         stopService(context)
         emitState()
@@ -512,6 +537,69 @@ object NativeAudioRuntime {
             .build()
     }
 
+    private fun registerAudioDeviceCallbackLocked(context: Context) {
+        if (audioDeviceCallback != null) return
+        val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return
+        runCatching {
+            audioManager.registerAudioDeviceCallback(audioDeviceCallbackImpl, tickHandler)
+            audioDeviceCallback = audioDeviceCallbackImpl
+        }.onFailure { Log.w(TAG, "registerAudioDeviceCallback failed", it) }
+    }
+
+    private fun unregisterAudioDeviceCallbackLocked(context: Context) {
+        val callback = audioDeviceCallback ?: return
+        val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
+        runCatching { audioManager?.unregisterAudioDeviceCallback(callback) }
+        audioDeviceCallback = null
+    }
+
+    private fun refreshOutputRouteAndEmit() {
+        synchronized(lock) {
+            val ctx = appContext ?: return
+            outputRouteCache = currentOutputRouteLocked(ctx)
+        }
+        emitState()
+    }
+
+    /**
+     * Active audio output route, derived from `AudioManager.getDevices(GET_DEVICES_OUTPUTS)`.
+     * Android has no single "active sink" API for media routing, so we pick by priority
+     * (Bluetooth > USB > wired > HDMI > builtin) — a heuristic that matches the framework's
+     * usual default routing.
+     */
+    private fun currentOutputRouteLocked(context: Context): String {
+        val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
+            ?: return "unknown"
+        val devices = runCatching { audioManager.getDevices(AudioManager.GET_DEVICES_OUTPUTS) }
+            .getOrNull() ?: return "unknown"
+        if (devices.isEmpty()) return "unknown"
+        val routes = devices.mapNotNull { mapDeviceTypeToRoute(it.type) }.toSet()
+        return when {
+            "bluetooth" in routes -> "bluetooth"
+            "usb" in routes -> "usb"
+            "wired" in routes -> "wired"
+            "hdmi" in routes -> "hdmi"
+            "builtin" in routes -> "builtin"
+            "other" in routes -> "other"
+            else -> "unknown"
+        }
+    }
+
+    private fun mapDeviceTypeToRoute(type: Int): String? = when (type) {
+        AudioDeviceInfo.TYPE_BUILTIN_SPEAKER,
+        AudioDeviceInfo.TYPE_BUILTIN_EARPIECE -> "builtin"
+        AudioDeviceInfo.TYPE_WIRED_HEADSET,
+        AudioDeviceInfo.TYPE_WIRED_HEADPHONES -> "wired"
+        AudioDeviceInfo.TYPE_BLUETOOTH_A2DP,
+        AudioDeviceInfo.TYPE_BLUETOOTH_SCO -> "bluetooth"
+        AudioDeviceInfo.TYPE_USB_DEVICE,
+        AudioDeviceInfo.TYPE_USB_HEADSET,
+        AudioDeviceInfo.TYPE_USB_ACCESSORY -> "usb"
+        AudioDeviceInfo.TYPE_HDMI,
+        AudioDeviceInfo.TYPE_HDMI_ARC -> "hdmi"
+        else -> "other"
+    }
+
     /**
      * Best-effort output latency estimate in seconds, derived from the platform's
      * low-latency output buffer hint:
@@ -547,6 +635,8 @@ object NativeAudioRuntime {
                 isPlaying = false,
                 buffering = false,
                 rate = 1.0,
+                outputLatency = outputLatencyEstimateSec,
+                outputRoute = outputRouteCache,
                 error = null,
             )
 
@@ -580,6 +670,7 @@ object NativeAudioRuntime {
             buffering = effectiveBuffering,
             rate = exoPlayer.playbackParameters.speed.toDouble(),
             outputLatency = outputLatencyEstimateSec,
+            outputRoute = outputRouteCache,
             error = lastError,
         )
     }
@@ -765,6 +856,7 @@ class NativeAudioPlugin(private val activity: Activity) : Plugin(activity) {
         payload.put("buffering", state.buffering)
         payload.put("rate", state.rate)
         payload.put("outputLatency", state.outputLatency)
+        payload.put("outputRoute", state.outputRoute)
         if (!state.error.isNullOrBlank()) payload.put("error", state.error)
         return payload
     }

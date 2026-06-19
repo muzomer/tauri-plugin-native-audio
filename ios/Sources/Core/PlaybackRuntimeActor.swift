@@ -394,7 +394,8 @@ actor PlaybackRuntimeActor {
       rawDuration: playerAdapter.durationSeconds(),
       isActuallyPlaying: playerAdapter.isActuallyPlaying(),
       isBuffering: playerAdapter.isBuffering(),
-      outputLatency: audioSessionController.outputLatencySeconds()
+      outputLatency: audioSessionController.outputLatencySeconds(),
+      outputRoute: audioSessionController.outputRoute()
     )
   }
 
@@ -455,6 +456,8 @@ actor PlaybackRuntimeActor {
       && lhs.isPlaying == rhs.isPlaying
       && lhs.buffering == rhs.buffering
       && lhs.rate == rhs.rate
+      && lhs.outputLatency == rhs.outputLatency
+      && lhs.outputRoute == rhs.outputRoute
       && lhs.error == rhs.error
   }
 

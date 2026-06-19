@@ -133,7 +133,8 @@ struct PlaybackStateMachine: Sendable {
     rawDuration: Double,
     isActuallyPlaying: Bool,
     isBuffering: Bool,
-    outputLatency: Double
+    outputLatency: Double,
+    outputRoute: String
   ) -> NativeAudioState {
     let duration = (rawDuration.isFinite && rawDuration > 0) ? rawDuration : 0.0
     let baseCurrent = (rawCurrentTime.isFinite && rawCurrentTime >= 0) ? rawCurrentTime : 0.0
@@ -198,6 +199,7 @@ struct PlaybackStateMachine: Sendable {
       buffering: effectiveBuffering,
       rate: playbackRate,
       outputLatency: max(0.0, outputLatency),
+      outputRoute: outputRoute,
       error: lastError
     )
   }
