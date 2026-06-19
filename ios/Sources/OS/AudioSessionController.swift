@@ -6,6 +6,7 @@ enum AudioSessionEvent: Sendable {
   case interruptionBegan
   case interruptionEnded(shouldResume: Bool)
   case oldDeviceUnavailable
+  case routeChanged
 }
 
 final class AudioSessionController {
@@ -21,6 +22,19 @@ final class AudioSessionController {
     try onMain {
       let session = AVAudioSession.sharedInstance()
       try session.setCategory(.playback, mode: .default, options: [])
+    }
+  }
+
+  /// OS-reported audio output latency in seconds. Route-aware (updates for Bluetooth,
+  /// AirPods, etc.). Returns 0 when unknown — e.g. the session is not active yet, in
+  /// which case `AVAudioSession` reports 0.
+  func outputLatencySeconds() -> Double {
+    onMain {
+      let latency = AVAudioSession.sharedInstance().outputLatency
+      guard latency.isFinite, latency >= 0 else {
+        return 0.0
+      }
+      return latency
     }
   }
 
@@ -114,6 +128,10 @@ final class AudioSessionController {
 
     if reason == .oldDeviceUnavailable {
       eventHandler?(.oldDeviceUnavailable)
+    } else {
+      // The output route changed (e.g. switched to Bluetooth/AirPods); output latency
+      // may have changed, so let the runtime re-emit state with the fresh value.
+      eventHandler?(.routeChanged)
     }
   }
 

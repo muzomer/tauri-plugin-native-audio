@@ -9,6 +9,7 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.app.ActivityManager
+import android.media.AudioManager
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
@@ -56,6 +57,9 @@ data class NativeAudioState(
     val isPlaying: Boolean,
     val buffering: Boolean,
     val rate: Double,
+    // OS-reported audio output latency in seconds. 0 means unknown. See
+    // NativeAudioRuntime.estimateOutputLatencySecLocked for the (best-effort) source.
+    val outputLatency: Double = 0.0,
     val error: String? = null,
 )
 
@@ -105,6 +109,8 @@ object NativeAudioRuntime {
     private var lastProgressPersistedAtMs = 0L
     private var lastProgressPersistedStoryId: Long? = null
     private var lastProgressPersistedTimeSec: Double? = null
+    // Best-effort, device-static output latency estimate in seconds (0 = unknown).
+    private var outputLatencyEstimateSec = 0.0
 
     private val tickRunnable = object : Runnable {
         override fun run() {
@@ -184,6 +190,7 @@ object NativeAudioRuntime {
 
             val ctx = context.applicationContext
             appContext = ctx
+            outputLatencyEstimateSec = estimateOutputLatencySecLocked(ctx)
 
             val audioAttributes = AudioAttributes.Builder()
                 .setUsage(C.USAGE_MEDIA)
@@ -505,6 +512,32 @@ object NativeAudioRuntime {
             .build()
     }
 
+    /**
+     * Best-effort output latency estimate in seconds, derived from the platform's
+     * low-latency output buffer hint:
+     * PROPERTY_OUTPUT_FRAMES_PER_BUFFER / PROPERTY_OUTPUT_SAMPLE_RATE.
+     *
+     * IMPORTANT: this is only the device's low-latency buffer hint. It does NOT capture
+     * Bluetooth A2DP output latency (which can be 100-300ms+), and it does not change
+     * with the output route. AudioTrack.getTimestamp() would be more accurate, but
+     * ExoPlayer owns its AudioTrack internally via DefaultAudioSink, so it is not
+     * reachable here. Returns 0.0 (unknown) on any failure.
+     */
+    private fun estimateOutputLatencySecLocked(context: Context): Double {
+        return runCatching {
+            val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
+                ?: return 0.0
+            val framesPerBuffer = audioManager
+                .getProperty(AudioManager.PROPERTY_OUTPUT_FRAMES_PER_BUFFER)
+                ?.toIntOrNull() ?: return 0.0
+            val sampleRate = audioManager
+                .getProperty(AudioManager.PROPERTY_OUTPUT_SAMPLE_RATE)
+                ?.toIntOrNull() ?: return 0.0
+            if (framesPerBuffer <= 0 || sampleRate <= 0) return 0.0
+            framesPerBuffer.toDouble() / sampleRate.toDouble()
+        }.getOrDefault(0.0)
+    }
+
     private fun snapshotLocked(): NativeAudioState {
         val exoPlayer = player
             ?: return NativeAudioState(
@@ -546,6 +579,7 @@ object NativeAudioRuntime {
             isPlaying = effectiveIsPlaying,
             buffering = effectiveBuffering,
             rate = exoPlayer.playbackParameters.speed.toDouble(),
+            outputLatency = outputLatencyEstimateSec,
             error = lastError,
         )
     }
@@ -578,16 +612,6 @@ class NativeAudioPlugin(private val activity: Activity) : Plugin(activity) {
         }.onFailure {
             invoke.reject(it.message ?: "initialize failed")
         }
-    }
-
-    @Command
-    fun register_listener(invoke: Invoke) {
-        invoke.resolve()
-    }
-
-    @Command
-    fun remove_listener(invoke: Invoke) {
-        invoke.resolve()
     }
 
     @Command
@@ -740,6 +764,7 @@ class NativeAudioPlugin(private val activity: Activity) : Plugin(activity) {
         payload.put("isPlaying", state.isPlaying)
         payload.put("buffering", state.buffering)
         payload.put("rate", state.rate)
+        payload.put("outputLatency", state.outputLatency)
         if (!state.error.isNullOrBlank()) payload.put("error", state.error)
         return payload
     }

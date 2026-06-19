@@ -1,7 +1,5 @@
 const COMMANDS: &[&str] = &[
     "initialize",
-    "register_listener",
-    "remove_listener",
     "set_source",
     "play",
     "pause",

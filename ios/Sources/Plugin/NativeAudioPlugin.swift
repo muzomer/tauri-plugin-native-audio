@@ -19,7 +19,11 @@ class NativeAudioPlugin: Plugin, NativeAudioEventEmitter {
   }
 
   func emitNativeAudioState(_ state: NativeAudioState) {
-    try? trigger(nativeAudioStateEvent, data: state)
+    do {
+      try trigger(nativeAudioStateEvent, data: state)
+    } catch {
+      NSLog("[native-audio] failed to emit state: \(error.localizedDescription)")
+    }
   }
 
   @objc public func initialize(_ invoke: Invoke) {

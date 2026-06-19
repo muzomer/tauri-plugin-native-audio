@@ -7,6 +7,8 @@ export type NativeAudioState = {
   isPlaying: boolean;
   buffering: boolean;
   rate: number;
+  /** OS-reported audio output latency in seconds. 0 (or absent) means unknown. */
+  outputLatency?: number;
   error?: string;
 };
 

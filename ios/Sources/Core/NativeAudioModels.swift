@@ -11,6 +11,8 @@ struct NativeAudioState: Encodable, Sendable {
   let isPlaying: Bool
   let buffering: Bool
   let rate: Double
+  // OS-reported audio output latency in seconds (route-aware). 0 means unknown.
+  let outputLatency: Double
   let error: String?
 }
 

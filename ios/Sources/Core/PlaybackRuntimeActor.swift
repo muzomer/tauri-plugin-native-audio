@@ -360,6 +360,11 @@ actor PlaybackRuntimeActor {
         playerAdapter.pause()
       }
       emitState(trigger: .transition, forcePersistCheckpoint: true, forceEmit: true, refreshArtwork: false)
+
+    case .routeChanged:
+      // Output route changed (output latency may differ now). Force a re-emit so
+      // consumers pick up the updated latency even while paused.
+      emitState(trigger: .transition, forcePersistCheckpoint: false, forceEmit: true, refreshArtwork: false)
     }
   }
 
@@ -388,7 +393,8 @@ actor PlaybackRuntimeActor {
       rawCurrentTime: playerAdapter.currentTimeSeconds(),
       rawDuration: playerAdapter.durationSeconds(),
       isActuallyPlaying: playerAdapter.isActuallyPlaying(),
-      isBuffering: playerAdapter.isBuffering()
+      isBuffering: playerAdapter.isBuffering(),
+      outputLatency: audioSessionController.outputLatencySeconds()
     )
   }
 
