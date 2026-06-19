@@ -177,6 +177,15 @@ Types:
 ```ts
 export type NativeAudioStatus = "idle" | "loading" | "playing" | "ended" | "error";
 
+export type NativeAudioOutputRoute =
+  | "builtin"
+  | "wired"
+  | "bluetooth"
+  | "usb"
+  | "hdmi"
+  | "other"
+  | "unknown";
+
 export type NativeAudioState = {
   status: NativeAudioStatus;
   currentTime: number;
@@ -184,6 +193,10 @@ export type NativeAudioState = {
   isPlaying: boolean;
   buffering: boolean;
   rate: number;
+  /** OS-reported output latency in seconds. See "Latency and output routing" below. */
+  outputLatency?: number;
+  /** Active audio output route. See "Latency and output routing" below. */
+  outputRoute?: NativeAudioOutputRoute;
   error?: string;
 };
 
@@ -230,6 +243,56 @@ State semantics:
 - `playing`: active playback
 - `ended`: reached media end
 - `error`: runtime/player error
+
+## Latency and output routing
+
+`NativeAudioState` exposes two related fields for consumers that align UI to audible playback (e.g. transcript-word highlighting, lyrics, captions):
+
+- `outputLatency` — OS-reported output latency in seconds. `0` (or absent) means unknown.
+- `outputRoute` — active audio output route: `"builtin"`, `"wired"`, `"bluetooth"`, `"usb"`, `"hdmi"`, `"other"`, `"unknown"`.
+
+The two platforms expose latency very differently, so consumers should branch on `outputRoute`:
+
+| Platform | `currentTime` is…                       | Correction to apply                                  |
+| -------- | --------------------------------------- | ---------------------------------------------------- |
+| iOS      | decoder time (not latency-adjusted)     | subtract `outputLatency` for *every* route           |
+| Android, `builtin` / `wired` | already audible-aligned via `AudioTrack.getTimestamp()` inside `DefaultAudioSink` | apply **no** correction (`outputLatency` is a tiny device-static buffer hint; subtracting it would over-correct) |
+| Android, `bluetooth` | **not** fully audible-aligned — A2DP codec + transport delay (~100–300 ms) is invisible to the framework | apply a fixed app-side correction (`outputLatency` cannot capture A2DP delay) |
+| Any, `unknown` | unknown — happens briefly on Android before `AudioDeviceCallback` fires | treat as `builtin` (no correction) or as worst case — caller's choice |
+
+A reusable helper:
+
+```ts
+import type { NativeAudioState } from "tauri-plugin-native-audio-api";
+
+// Recommended starting value for BT A2DP on Android. Expose this as a tunable
+// in your app — AirPods are typically ~0.18s, generic SBC headsets 0.20–0.30s.
+const ANDROID_BLUETOOTH_FUDGE_SEC = 0.20;
+
+export function audibleCurrentTime(
+  state: NativeAudioState,
+  platform: "ios" | "android"
+): number {
+  const latency = state.outputLatency ?? 0;
+  if (platform === "ios") {
+    // iOS outputLatency is route-aware (includes Bluetooth/AirPlay).
+    return Math.max(0, state.currentTime - latency);
+  }
+  // Android.
+  if (state.outputRoute === "bluetooth") {
+    return Math.max(0, state.currentTime - ANDROID_BLUETOOTH_FUDGE_SEC);
+  }
+  // builtin / wired / usb / hdmi / other / unknown: already audible-aligned.
+  return state.currentTime;
+}
+```
+
+Notes:
+
+- `outputRoute` change emits a fresh state update on both platforms (iOS: `AVAudioSession` route-change notification; Android: `AudioManager.AudioDeviceCallback`). Consumers do not need to poll.
+- Android's route is derived heuristically from `AudioManager.getDevices(GET_DEVICES_OUTPUTS)` with priority `bluetooth > usb > wired > hdmi > builtin`. It is not "the audio sink the framework actually chose" — there is no public API for that — but matches default routing in the overwhelming majority of cases.
+- On iOS, `"other"` covers AirPlay and CarPlay; `outputLatency` remains meaningful there, so the iOS branch in the helper handles them correctly without extra cases.
+- Both fields are typed as optional in JS because older plugin versions did not emit them. Always default `outputLatency` to `0` and `outputRoute` to `"unknown"` on the consumer side.
 
 ## Native Progress Checkpoint (mobile)
 
