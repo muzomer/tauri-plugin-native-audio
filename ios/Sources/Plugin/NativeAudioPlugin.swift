@@ -134,6 +134,17 @@ class NativeAudioPlugin: Plugin, NativeAudioEventEmitter {
       invoke.resolve()
     }
   }
+
+  // No-op stubs required by `@tauri-apps/api/core`'s `addPluginListener`, which
+  // dispatches `plugin:<name>|registerListener` / `removeListener` to attach
+  // event listeners. The actual event delivery goes through `trigger(...)`.
+  @objc public func registerListener(_ invoke: Invoke) {
+    invoke.resolve()
+  }
+
+  @objc public func removeListener(_ invoke: Invoke) {
+    invoke.resolve()
+  }
 }
 
 extension NativeAudioPlugin: @unchecked Sendable {}

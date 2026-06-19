@@ -9,6 +9,8 @@ const COMMANDS: &[&str] = &[
     "get_progress_checkpoint",
     "clear_progress_checkpoint",
     "dispose",
+    "register_listener",
+    "remove_listener",
 ];
 
 fn main() {

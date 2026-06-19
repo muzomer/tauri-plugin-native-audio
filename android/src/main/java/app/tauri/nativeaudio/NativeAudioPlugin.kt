@@ -825,6 +825,19 @@ class NativeAudioPlugin(private val activity: Activity) : Plugin(activity) {
         }
     }
 
+    // No-op stubs required by `@tauri-apps/api/core`'s `addPluginListener`, which
+    // dispatches `plugin:<name>|registerListener` / `removeListener` to attach
+    // event listeners. The actual event delivery goes through `trigger(...)`.
+    @Command
+    fun register_listener(invoke: Invoke) {
+        invoke.resolve()
+    }
+
+    @Command
+    fun remove_listener(invoke: Invoke) {
+        invoke.resolve()
+    }
+
     override fun onDestroy() {
         if (activeInstance === this) activeInstance = null
         super.onDestroy()

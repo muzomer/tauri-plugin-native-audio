@@ -11,4 +11,6 @@ permissions = [
   "allow-get-progress-checkpoint",
   "allow-clear-progress-checkpoint",
   "allow-dispose",
+  "allow-register-listener",
+  "allow-remove-listener",
 ]
